@@ -6,7 +6,7 @@
 //!
 //! let mut re = RegExp::new(
 //!     r#"(?<greeting>\w+), (?<name>\w+)"#,
-//!     RegExpFlags::new().has_indices(),
+//!     RegExpFlags::new().set_has_indices(),
 //! )
 //! .unwrap();
 //!
@@ -19,7 +19,6 @@
 //! assert_eq!("Hello", named_captures.get("greeting").unwrap().slice);
 //! assert_eq!(7, named_captures.get("name").unwrap().index)
 //! ```
-//! See [RegExp] for detailed information about the API.
 
 use anyhow::Context;
 use js_sys::{Function, JsString};
@@ -84,7 +83,7 @@ impl<'p> RegExp<'p> {
     /// Calls the underlying JavaScript `RegExp`'s `exec` method. \
     /// Returns `None` if the JavaScript call returns null.
     /// The returned [`ExecResult`]'s `captures` member is `None` if the underlying JavaScript call returns an object
-    /// that does not have an `indices` property, which is only present when the [`d` flag](RegExpFlags::has_indices)
+    /// that does not have an `indices` property, which is only present when the [`d` flag](RegExpFlags::set_has_indices)
     /// is set for the expression.
     ///
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/exec)
@@ -278,38 +277,38 @@ impl RegExpFlags {
         /// [ExecResult]'s `captures` field is `None` when this flag is not set.
         ///
         /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/hasIndices#description)
-        (pub has_indices, b'd')
+        (pub set_has_indices, b'd')
         /// Sets the `i` flag, which enables case-insensitive matching.
         ///
         /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/ignoreCase#description)
-        (pub ignore_case, b'i')
+        (pub set_ignore_case, b'i')
         /// Sets the `g` flag, which enables global matching.
         ///
         /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/global#description)
-        (pub global, b'g')
+        (pub set_global, b'g')
         /// Sets the `s` flag, which causes the `.` special character to match additonal line terminators.
         ///
         /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/dotAll#description)
-        (pub dot_all, b's')
+        (pub set_dot_all, b's')
         /// Sets the `m` flag, which enables multiline matching.
         ///
         /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/multiline#description)
-        (pub multiline, b'm')
+        (pub set_multiline, b'm')
         /// Sets the `y` flag, which enables sticky matching.
         ///
         /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/sticky#description)
-        (pub sticky, b'y')
-        (unicode_internal, b'u')
-        (unicode_sets_internal, b'v')
+        (pub set_sticky, b'y')
+        (set_unicode_internal, b'u')
+        (set_unicode_sets_internal, b'v')
     );
     /// Sets the `u` flag, which enables some unicode-related features.
     /// Unsets the `v` (`unicode_sets`) flag.
     ///
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/unicode#description)
-    pub fn unicode(mut self) -> Self {
+    pub fn set_unicode(mut self) -> Self {
         match self.is_set(b'v') {
             Some(idx) => self.inner[idx] = b'u',
-            None => self = self.unicode_internal(),
+            None => self = self.set_unicode_internal(),
         }
         self
     }
@@ -317,10 +316,10 @@ impl RegExpFlags {
     /// Unsets the `u` flag.
     ///
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/unicodeSets#description)
-    pub fn unicode_sets(mut self) -> Self {
+    pub fn set_unicode_sets(mut self) -> Self {
         match self.is_set(b'u') {
             Some(idx) => self.inner[idx] = b'v',
-            None => self = self.unicode_sets_internal(),
+            None => self = self.set_unicode_sets_internal(),
         }
         self
     }
@@ -330,14 +329,14 @@ impl From<&str> for RegExpFlags {
         let mut flags = Self::new();
         for ch in value.chars() {
             match ch {
-                'd' => flags = flags.has_indices(),
-                'i' => flags = flags.ignore_case(),
-                'g' => flags = flags.global(),
-                's' => flags = flags.dot_all(),
-                'm' => flags = flags.multiline(),
-                'y' => flags = flags.sticky(),
-                'u' => flags = flags.unicode(),
-                'v' => flags = flags.unicode_sets(),
+                'd' => flags = flags.set_has_indices(),
+                'i' => flags = flags.set_ignore_case(),
+                'g' => flags = flags.set_global(),
+                's' => flags = flags.set_dot_all(),
+                'm' => flags = flags.set_multiline(),
+                'y' => flags = flags.set_sticky(),
+                'u' => flags = flags.set_unicode(),
+                'v' => flags = flags.set_unicode_sets(),
                 _ => (),
             }
         }

@@ -16,7 +16,7 @@ use js_regexp::{RegExp, RegExpFlags}
 
 let mut re = RegExp::new(
     r#"(?<greeting>\w+), (?<name>\w+)"#,
-    RegExpFlags::new().has_indices(),
+    RegExpFlags::new().set_has_indices(),
 )
 .unwrap();
 
