@@ -5,46 +5,53 @@ use std::{
 };
 use wasm_bindgen::{JsCast, JsValue};
 
-/// A wrapped JavaScript `RegExp`. The main type of this crate.
+/// A wrapped JavaScript `RegExp`. The main type of this crate. \
+/// [MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp)
 #[derive(Debug)]
 pub struct RegExp<'p> {
     inner: js_sys::RegExp,
     pattern: PatternSource<'p>,
 }
 impl<'p> RegExp<'p> {
-    /// Constructs a new regular expression, backed by a `RegExp` on the JavaScript heap.
+    /// Constructs a new regular expression, backed by a `RegExp` on the JavaScript heap. \
+    /// You may pass a `&str` as the flags argument. \
     /// When constructed by this function, the returned value's lifetime becomes tied to the
-    /// provided `&str` pattern. This may not always be what you want; See `new_with_ownership`
+    /// provided `&str` pattern. This may not always be what you want; See [new_with_ownership](RegExp::new_with_ownership)
     /// for an alternative that takes ownership of a `String` pattern instead.
-    pub fn new(pattern: &'p str, flags: &str) -> Self {
+    pub fn new<F: Into<RegExpFlags>>(pattern: &'p str, flags: F) -> Self {
         Self {
-            inner: js_sys::RegExp::new(pattern, flags),
+            inner: js_sys::RegExp::new(pattern, flags.into().get()),
             pattern: PatternSource::Ref(pattern),
         }
     }
-    /// Constructs a new regular expression, backed by a `RegExp` on the JavaScript heap.
-    /// Takes ownership of the provided `String` pattern. Use `new` instead if you have a `&'static str`,
+    /// Constructs a new regular expression, backed by a `RegExp` on the JavaScript heap. \
+    /// You may pass a `&str` as the flags argument. \
+    /// Takes ownership of the provided `String` pattern. Use [new](RegExp::new) instead if you have a `&'static str`,
     /// or if it otherwise makes sense for the constructed value to store only a reference to your pattern.
-    pub fn new_with_ownership(pattern: String, flags: &str) -> Self {
+    pub fn new_with_ownership<F: Into<RegExpFlags>>(pattern: String, flags: F) -> Self {
         Self {
-            inner: js_sys::RegExp::new(&pattern, flags),
+            inner: js_sys::RegExp::new(&pattern, flags.into().get()),
             pattern: PatternSource::Owned(pattern),
         }
     }
-    /// Constructs a new regular expression, backed by a `RegExp` on the JavaScript heap.
-    /// Unlike with `new`, the returned structure does not hold on to a reference to the provided
+    /// Constructs a new regular expression, backed by a `RegExp` on the JavaScript heap. \
+    /// You may pass a `&str` as the flags argument. \
+    /// Unlike with [new](RegExp::new), the returned structure does not hold on to a reference to the provided
     /// `&str` pattern. This is achieved by copying any group names from the JavaScript heap every time the regular expression
     /// is used.
-    pub fn new_with_copying(pattern: &str, flags: &str) -> Self {
+    pub fn new_with_copying<F: Into<RegExpFlags>>(pattern: &str, flags: F) -> Self {
         Self {
-            inner: js_sys::RegExp::new(&pattern, flags),
+            inner: js_sys::RegExp::new(&pattern, flags.into().get()),
             pattern: PatternSource::Copy,
         }
     }
-    /// Calls the underlying JavaScript `RegExp`'s `exec` method. Returns `None` if the JavaScript call returns null.
-    /// The returned `ExecResult`'s `captures` member is `None` if the underlying JavaScript call returns an object
-    /// that does not have an `indices` property, which is only present when the `d` flag is set for the regular expression.
-    /// Panics if the JavaScript call doesn't behave as expected.
+    /// Calls the underlying JavaScript `RegExp`'s `exec` method. \
+    /// Returns `None` if the JavaScript call returns null.
+    /// The returned [ExecResult]'s `captures` member is `None` if the underlying JavaScript call returns an object
+    /// that does not have an `indices` property, which is only present when the [`d` flag](RegExpFlags::has_indices)
+    /// is set for the expression.
+    /// Panics if the JavaScript call doesn't behave as expected. \
+    /// [MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/exec)
     pub fn exec<'h>(&'p mut self, haystack: &'h str) -> Option<ExecResult<'h, 'p>> {
         let result = self.inner.exec(haystack)?;
 
@@ -52,7 +59,7 @@ impl<'p> RegExp<'p> {
         let utf8_match_index = count_bytes_from_utf16_units(haystack, utf16_match_index);
         let matched = &haystack[utf8_match_index..];
         let string_match_js = result.iter().next().unwrap();
-        let string_match_js: &js_sys::JsString = string_match_js.unchecked_ref();
+        let string_match_js: &JsString = string_match_js.unchecked_ref();
         let utf16_match_length = string_match_js.length() as usize;
         let utf8_match_length = count_bytes_from_utf16_units(matched, utf16_match_length);
         let matched = &matched[..utf8_match_length];
@@ -85,7 +92,7 @@ impl<'p> RegExp<'p> {
 
         let group_names = js_sys::Reflect::own_keys(&named_indices_js).unwrap();
         for group_name_js in group_names.iter() {
-            let group_name_js: js_sys::JsString = group_name_js.unchecked_into();
+            let group_name_js: JsString = group_name_js.unchecked_into();
             let indices_js = js_sys::Reflect::get(&named_indices_js, &group_name_js).unwrap();
             let capture = slice_capture(haystack, &indices_js);
             let group_name = match self.pattern.get() {
@@ -123,7 +130,103 @@ impl<'a> PatternSource<'a> {
     }
 }
 
-/// The result type of `RegExp::exec`.
+macro_rules! flag_setters {
+    (
+        $(
+            $(#[$doc:meta])*
+            ($id:ident, $flag:literal)
+        )*
+    ) => {
+        $(
+            $(#[$doc])*
+            pub fn $id(mut self) -> Self {
+                let find = self
+                    .inner
+                    .iter()
+                    .enumerate()
+                    .find(|(_, v)| **v == 0 || **v == $flag);
+                let (i, flag) = match find {
+                    Some(v) => v,
+                    None => return self,
+                };
+                if *flag != 0 {
+                    return self;
+                }
+                self.inner[i] = $flag;
+                self
+            }
+        )*
+    };
+}
+/// A constrained representation of JavaScript `RegExp` flags. Prevents invalid
+/// and duplicate flags from being set.
+#[derive(Debug)]
+pub struct RegExpFlags {
+    inner: [u8; 7],
+}
+impl RegExpFlags {
+    pub fn new() -> Self {
+        RegExpFlags { inner: [0; 7] }
+    }
+    fn get(&self) -> &str {
+        let slice_end = self
+            .inner
+            .iter()
+            .enumerate()
+            .find(|(_, v)| **v == 0)
+            .map(|v| v.0);
+        let slice = std::str::from_utf8(match slice_end {
+            Some(v) => &self.inner[..v],
+            None => &self.inner,
+        })
+        .unwrap();
+        slice
+    }
+    flag_setters!(
+        /// Sets the `d` flag, which causes capture indices to be returned when matching. \
+        /// [ExecResult]'s `captures` field is `None` when this flag is not set. \
+        /// [MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/hasIndices#description)
+        (has_indices, b'd')
+        /// Sets the `i` flag, which enables case-insensitive matching. \
+        /// [MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/ignoreCase#description)
+        (ignore_case, b'i')
+        /// Sets the `g` flag, which enables global matching. \
+        /// [MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/global#description)
+        (global, b'g')
+        /// Sets the `s` flag, which causes the `.` special character to match additonal line terminators. \
+        /// [MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/dotAll#description)
+        (dot_all, b's')
+        /// Sets the `m` flag, which enables multiline matching. \
+        /// [MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/multiline#description)
+        (multiline, b'm')
+        /// Sets the `y` flag, which enables sticky matching. \
+        /// [MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/sticky#description)
+        (sticky, b'y')
+        /// Sets the `u` flag, which enables some unicode-related features. \
+        /// [MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/unicode#description)
+        (unicode, b'u')
+    );
+}
+impl From<&str> for RegExpFlags {
+    fn from(value: &str) -> Self {
+        let mut flags = Self::new();
+        for ch in value.chars() {
+            match ch {
+                'd' => flags = flags.has_indices(),
+                'i' => flags = flags.ignore_case(),
+                'g' => flags = flags.global(),
+                's' => flags = flags.dot_all(),
+                'm' => flags = flags.multiline(),
+                'y' => flags = flags.sticky(),
+                'u' => flags = flags.unicode(),
+                _ => (),
+            }
+        }
+        flags
+    }
+}
+
+/// The result type of [RegExp::exec].
 #[derive(Debug)]
 pub struct ExecResult<'h, 'p> {
     pub match_slice: &'h str,
@@ -132,7 +235,7 @@ pub struct ExecResult<'h, 'p> {
     pub captures: Option<CapturesList<'h, 'p>>,
 }
 
-/// A list of captures.
+/// A list of [Capture]s.
 #[derive(Debug)]
 pub struct CapturesList<'h, 'p> {
     pub vec: Vec<Capture<'h, 'p>>,
@@ -153,7 +256,7 @@ impl<'h, 'p> CapturesList<'h, 'p> {
     }
 }
 
-/// An index, length, slice and optional group name of a capture in a haystack.
+/// An index, length, slice, and optional group name of a capture in a haystack.
 #[derive(Debug)]
 pub struct Capture<'h, 'p> {
     pub group_name: Option<GroupName<'p>>,
@@ -162,6 +265,8 @@ pub struct Capture<'h, 'p> {
     pub slice: &'h str,
 }
 
+/// A name of a named capture group, backed either by a slice of a pattern or
+/// an owned `String` copied from JavaScript.
 #[derive(Debug)]
 pub enum GroupName<'a> {
     Owned(String),
