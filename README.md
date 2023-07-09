@@ -1,6 +1,10 @@
 js-regexp
-=====
+=========
+
 **Ergonomic Rust bindings to the JavaScript standard built-in `RegExp` object**
+
+[![Latest Version](https://img.shields.io/crates/v/js-regexp?style=flat-square)](https://crates.io/crates/js-regexp)
+[![Documentation](https://img.shields.io/docsrs/js-regexp/latest?style=flat-square)](https://docs.rs/js-regexp)
 
 In WASM environments that are attached to a JavaScript runtime, depending on a crate like `regex`
 for regular expression matching can seem silly (at least when package size is a concern) - There's a perfectly fine
@@ -9,7 +13,7 @@ _expose_ the standard built-in `RegExp` object, it does not aim to provide a con
 This crate aims to bridge that gap.
 
 ## Usage
-See the rustdoc documentation for detailed usage information.
+See [docs.rs](https://docs.rs/js-regexp/) for detailed usage information.
 #### Basic example
 ```rust
 use js_regexp::{RegExp, Flags}
