@@ -2,22 +2,23 @@
 //!
 //! ### Basic usage
 //! ```
-//! use js_regexp::{RegExp, RegExpFlags}
+//! use js_regexp::{RegExp, Flags}
 //!
-//! let mut re = RegExp::new(
+//! let re = RegExp::new(
 //!     r#"(?<greeting>\w+), (?<name>\w+)"#,
-//!     RegExpFlags::new().set_has_indices(),
+//!     Flags::new("d").unwrap(),
 //! )
 //! .unwrap();
 //!
 //! let result = re.exec("Hello, Alice!").unwrap();
 //! let named_captures = result.captures.unwrap();
 //! let named_captures = named_captures.get_named_captures_map();
+//!
 //! assert_eq!("Hello, Alice", result.match_slice);
 //! assert_eq!(0, result.match_index);
 //! assert_eq!(12, result.match_length);
 //! assert_eq!("Hello", named_captures.get("greeting").unwrap().slice);
-//! assert_eq!(7, named_captures.get("name").unwrap().index)
+//! assert_eq!(7, named_captures.get("name").unwrap().index);
 //! ```
 
 use anyhow::Context;
@@ -36,65 +37,64 @@ use wasm_bindgen::{JsCast, JsValue};
 pub struct RegExp<'p> {
     inner: js_sys::RegExp,
     pattern: PatternSource<'p>,
+    flags: Flags,
 }
 impl<'p> RegExp<'p> {
-    /// Constructs a new regular expression, backed by a `RegExp` on the JavaScript heap. \
+    /// Constructs a new regular expression, backed by a `RegExp` in JavaScript. \
     /// Returns an error if JavaScript throws a SyntaxError exception. \
-    /// You may pass a `&str` as the flags argument. \
     /// When constructed by this function, the returned value's lifetime becomes tied to the
     /// provided `&str` pattern. See [`new_with_ownership`](RegExp::new_with_ownership)
     /// for an alternative that takes ownership of a `String` pattern instead.
-    pub fn new<F: Into<RegExpFlags>>(pattern: &'p str, flags: F) -> Result<Self, JsValue> {
+    pub fn new(pattern: &'p str, flags: Flags) -> Result<Self, JsValue> {
         Ok(Self {
-            inner: construct_regexp_panicking(pattern, flags.into().get())?,
+            inner: construct_regexp_panicking(pattern, flags.build())?,
             pattern: PatternSource::Ref(pattern),
+            flags,
         })
     }
-    /// Constructs a new regular expression, backed by a `RegExp` on the JavaScript heap. \
+    /// Constructs a new regular expression, backed by a `RegExp` in JavaScript. \
     /// Returns an error if JavaScript throws a SyntaxError exception. \
-    /// You may pass a `&str` as the flags argument. \
     /// Takes ownership of the provided `String` pattern. Use [`new`](RegExp::new) instead if you have a `&'static str`,
     /// or if it otherwise makes sense for the constructed value to store only a reference to your pattern.
-    pub fn new_with_ownership<F: Into<RegExpFlags>>(
-        pattern: String,
-        flags: F,
-    ) -> Result<Self, JsValue> {
+    pub fn new_with_ownership(pattern: String, flags: Flags) -> Result<Self, JsValue> {
         Ok(Self {
-            inner: construct_regexp_panicking(&pattern, flags.into().get())?,
+            inner: construct_regexp_panicking(&pattern, flags.build())?,
             pattern: PatternSource::Owned(pattern),
+            flags,
         })
     }
-    /// Constructs a new regular expression, backed by a `RegExp` on the JavaScript heap. \
+    /// Constructs a new regular expression, backed by a `RegExp` in JavaScript. \
     /// Returns an error if JavaScript throws a SyntaxError exception. \
-    /// You may pass a `&str` as the flags argument. \
     /// Unlike with [`new`](RegExp::new), the returned structure does not hold on to a reference to the provided
     /// `&str` pattern. This is achieved by copying any group names from the JavaScript heap every time the regular expression
     /// is used.
-    pub fn new_with_copying<F: Into<RegExpFlags>>(
-        pattern: &str,
-        flags: F,
-    ) -> Result<Self, JsValue> {
+    pub fn new_with_copying(pattern: &str, flags: Flags) -> Result<Self, JsValue> {
         Ok(Self {
-            inner: construct_regexp_panicking(pattern, flags.into().get())?,
+            inner: construct_regexp_panicking(pattern, flags.build())?,
             pattern: PatternSource::Copy,
+            flags,
         })
     }
 
     /// Calls the underlying JavaScript `RegExp`'s `exec` method. \
     /// Returns `None` if the JavaScript call returns null.
     /// The returned [`ExecResult`]'s `captures` member is `None` if the underlying JavaScript call returns an object
-    /// that does not have an `indices` property, which is only present when the [`d` flag](RegExpFlags::set_has_indices)
+    /// that does not have an `indices` property, which is only present when the [`d` flag](FlagSets.set_has_indices)
     /// is set for the expression.
     ///
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/exec)
-    pub fn exec<'h>(&'p mut self, haystack: &'h str) -> Option<ExecResult<'h, 'p>> {
+    pub fn exec<'h>(&'p self, haystack: &'h str) -> Option<ExecResult<'h, 'p>> {
         match self.exec_internal(haystack) {
             Ok(v) => v,
             Err(v) => panic!("{:?}", v),
         }
     }
+    /// Returns a read-only reference to the flags set for this regular expression.
+    pub fn inspect_flags(&self) -> &FlagSets {
+        &self.flags.sets
+    }
     fn exec_internal<'h>(
-        &'p mut self,
+        &'p self,
         haystack: &'h str,
     ) -> Result<Option<ExecResult<'h, 'p>>, JsError> {
         let result = match self.inner.exec(haystack) {
@@ -212,135 +212,95 @@ impl<'a> PatternSource<'a> {
     }
 }
 
-macro_rules! flag_setters {
-    (
-        $(
-            $(#[$doc:meta])*
-            ($vis:vis $id:ident, $flag:literal)
-        )*
-    ) => {
-        $(
-            $(#[$doc])*
-            $vis fn $id(mut self) -> Self {
-                let find = self
-                    .inner
-                    .iter()
-                    .enumerate()
-                    .find(|(_, v)| **v == 0 || **v == $flag);
-                let (i, flag) = match find {
-                    Some(v) => v,
-                    None => return self,
-                };
-                if *flag != 0 {
-                    return self;
-                }
-                self.inner[i] = $flag;
-                self
-            }
-        )*
-    };
-}
-/// A constrained representation of JavaScript `RegExp` flags.
-/// Not all flags allowed here are supported on all platforms; The `new*` functions on [`RegExp`] will
-/// report a SyntaxError exception if you set unsupported flags.
+/// Boolean fields representing regular expression flags.
 #[derive(Debug)]
-pub struct RegExpFlags {
-    inner: [u8; 7],
+pub struct FlagSets {
+    /// The `d` flag, which causes capture indices to be returned when matching.
+    /// [`ExecResult`]'s `captures` field is `None` when this flag is not set.
+    /// ([MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/hasIndices#description))
+    pub has_indices: bool,
+    /// The `i` flag, which enables case-insensitive matching.
+    /// ([MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/ignoreCase#description))
+    pub ignore_case: bool,
+    /// The `g` flag, which enables global matching.
+    /// ([MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/global#description))
+    pub global: bool,
+    /// The `s` flag, which causes the `.` special character to match additonal line terminators.
+    /// ([MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/dotAll#description))
+    pub dot_all: bool,
+    /// The `m` flag, which enables multiline matching.
+    /// ([MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/multiline#description))
+    pub multiline: bool,
+    /// The `y` flag, which enables sticky matching.
+    /// ([MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/sticky#description))
+    pub sticky: bool,
+    /// The `u` flag, which enables some unicode-related features.
+    /// Can't be set at the same time as the `v` (`unicode_sets`) flag.
+    /// ([MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/unicode#description))
+    pub unicode: bool,
+    /// The `v` flag, which enables a superset of the features enabled by the `u` (`unicode`) flag.
+    /// Can't be set at the same time as the `u` flag.
+    /// ([MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/unicodeSets#description))
+    pub unicode_sets: bool,
 }
-impl RegExpFlags {
-    pub fn new() -> Self {
-        RegExpFlags { inner: [0; 7] }
-    }
-    fn get(&self) -> &str {
-        let slice_end = self
-            .inner
-            .iter()
-            .enumerate()
-            .find(|(_, v)| **v == 0)
-            .map(|v| v.0);
-        let slice = std::str::from_utf8(match slice_end {
-            Some(v) => &self.inner[..v],
-            None => &self.inner,
-        })
-        .unwrap(); // Can never panic if RegExpFlags is only modified through the public API
-        slice
-    }
-    fn is_set(&self, flag: u8) -> Option<usize> {
-        self.inner
-            .iter()
-            .enumerate()
-            .find(|(_, v)| **v == flag)
-            .map(|(v, _)| v)
-    }
-    flag_setters!(
-        /// Sets the `d` flag, which causes capture indices to be returned when matching. \
-        /// [ExecResult]'s `captures` field is `None` when this flag is not set.
-        ///
-        /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/hasIndices#description)
-        (pub set_has_indices, b'd')
-        /// Sets the `i` flag, which enables case-insensitive matching.
-        ///
-        /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/ignoreCase#description)
-        (pub set_ignore_case, b'i')
-        /// Sets the `g` flag, which enables global matching.
-        ///
-        /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/global#description)
-        (pub set_global, b'g')
-        /// Sets the `s` flag, which causes the `.` special character to match additonal line terminators.
-        ///
-        /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/dotAll#description)
-        (pub set_dot_all, b's')
-        /// Sets the `m` flag, which enables multiline matching.
-        ///
-        /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/multiline#description)
-        (pub set_multiline, b'm')
-        /// Sets the `y` flag, which enables sticky matching.
-        ///
-        /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/sticky#description)
-        (pub set_sticky, b'y')
-        (set_unicode_internal, b'u')
-        (set_unicode_sets_internal, b'v')
-    );
-    /// Sets the `u` flag, which enables some unicode-related features.
-    /// Unsets the `v` (`unicode_sets`) flag.
-    ///
-    /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/unicode#description)
-    pub fn set_unicode(mut self) -> Self {
-        match self.is_set(b'v') {
-            Some(idx) => self.inner[idx] = b'u',
-            None => self = self.set_unicode_internal(),
-        }
-        self
-    }
-    /// Sets the `v` flag, which enables a superset of the features enabled by the `u` (`unicode`) flag.
-    /// Unsets the `u` flag.
-    ///
-    /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/unicodeSets#description)
-    pub fn set_unicode_sets(mut self) -> Self {
-        match self.is_set(b'u') {
-            Some(idx) => self.inner[idx] = b'v',
-            None => self = self.set_unicode_sets_internal(),
-        }
-        self
-    }
+
+/// Restrictive interface for setting regular expression flags.
+#[derive(Debug)]
+pub struct Flags {
+    sets: FlagSets,
 }
-impl From<&str> for RegExpFlags {
-    fn from(value: &str) -> Self {
-        let mut flags = Self::new();
-        for ch in value.chars() {
+impl Flags {
+    /// Takes a source flags string using the same format as the JavaScript `RegExp` constructor,
+    /// but returns `None` if invalid flags, or invalid combinations of flags, are used.
+    pub fn new(source: &str) -> Option<Self> {
+        let mut flags = FlagSets {
+            has_indices: false,
+            ignore_case: false,
+            global: false,
+            dot_all: false,
+            multiline: false,
+            sticky: false,
+            unicode: false,
+            unicode_sets: false,
+        };
+        for ch in source.chars() {
             match ch {
-                'd' => flags = flags.set_has_indices(),
-                'i' => flags = flags.set_ignore_case(),
-                'g' => flags = flags.set_global(),
-                's' => flags = flags.set_dot_all(),
-                'm' => flags = flags.set_multiline(),
-                'y' => flags = flags.set_sticky(),
-                'u' => flags = flags.set_unicode(),
-                'v' => flags = flags.set_unicode_sets(),
-                _ => (),
+                'd' => (!flags.has_indices).then(|| flags.has_indices = true)?,
+                'i' => (!flags.ignore_case).then(|| flags.ignore_case = true)?,
+                'g' => (!flags.global).then(|| flags.global = true)?,
+                's' => (!flags.dot_all).then(|| flags.dot_all = true)?,
+                'm' => (!flags.multiline).then(|| flags.multiline = true)?,
+                'y' => (!flags.sticky).then(|| flags.sticky = true)?,
+                'u' => (!flags.unicode && !flags.unicode_sets).then(|| flags.unicode = true)?,
+                'v' => {
+                    (!flags.unicode && !flags.unicode_sets).then(|| flags.unicode_sets = true)?
+                }
+                _ => return None,
             }
         }
-        flags
+        Some(Self { sets: flags })
+    }
+    /// Returns a read-only reference to the inner `FlagSets`
+    pub fn inspect(&self) -> &FlagSets {
+        &self.sets
+    }
+    fn build(&self) -> JsValue {
+        let mut bytes_rep = [0u8; 7];
+        let mut idx = 0;
+        fn set_fn(bytes: &mut [u8; 7], idx: &mut usize, v: u8) {
+            bytes[*idx] = v;
+            *idx += 1;
+        }
+        let mut set = |v: u8| set_fn(&mut bytes_rep, &mut idx, v);
+        self.sets.has_indices.then(|| set(b'd'));
+        self.sets.ignore_case.then(|| set(b'i'));
+        self.sets.global.then(|| set(b'g'));
+        self.sets.dot_all.then(|| set(b's'));
+        self.sets.multiline.then(|| set(b'm'));
+        self.sets.sticky.then(|| set(b'y'));
+        self.sets.unicode.then(|| set(b'u'));
+        self.sets.unicode_sets.then(|| set(b'v'));
+        JsValue::from_str(std::str::from_utf8(&bytes_rep[..idx]).unwrap())
     }
 }
 
@@ -439,13 +399,13 @@ enum NewRegExpError {
     #[error("Unexpected error")]
     JsError(#[from] JsError),
 }
-fn construct_regexp_panicking(pattern: &str, flags: &str) -> Result<js_sys::RegExp, JsValue> {
+fn construct_regexp_panicking(pattern: &str, flags: JsValue) -> Result<js_sys::RegExp, JsValue> {
     construct_regexp(pattern, flags).map_err(|e| match e {
         NewRegExpError::SyntaxError(v) => v,
         NewRegExpError::JsError(e) => panic!("{:?}", e),
     })
 }
-fn construct_regexp(pattern: &str, flags: &str) -> Result<js_sys::RegExp, NewRegExpError> {
+fn construct_regexp(pattern: &str, flags: JsValue) -> Result<js_sys::RegExp, NewRegExpError> {
     let global = js_sys::global();
     let regexp_object = get_value_property_str("RegExp", &global).map_err(Into::<JsError>::into)?;
     let regexp_object: &Function = regexp_object
@@ -454,7 +414,7 @@ fn construct_regexp(pattern: &str, flags: &str) -> Result<js_sys::RegExp, NewReg
         .map_err(Into::<JsError>::into)?;
     let args = js_sys::Array::new_with_length(2);
     args.set(0, JsValue::from_str(pattern));
-    args.set(1, JsValue::from_str(flags));
+    args.set(1, flags);
     let regexp = js_sys::Reflect::construct(regexp_object, &args)
         .map_err(|e| NewRegExpError::SyntaxError(e))?;
     let regexp = regexp.dyn_into().map_err(Into::<JsError>::into)?;
@@ -538,4 +498,71 @@ fn count_bytes_from_utf16_units(s: &str, n_units: usize) -> Option<usize> {
     }
     let bytes_counted = i.next().map(|v| v.0).unwrap_or(s.len());
     Some(bytes_counted)
+}
+
+#[cfg(test)]
+mod tests {
+    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    use crate::{count_bytes_from_utf16_units, find_js_string, slice_capture};
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[wasm_bindgen_test]
+    fn test_flags() {
+        let flags = super::Flags::new("x");
+        // Rejects invalid flag
+        assert!(flags.is_none());
+        let flags = super::Flags::new("uv");
+        // Rejects invalid combination
+        assert!(flags.is_none());
+        let flags = super::Flags::new("digs").unwrap();
+        let sets = flags.inspect();
+        assert!(sets.has_indices);
+        assert!(sets.ignore_case);
+        assert!(sets.global);
+        assert!(sets.dot_all);
+        assert!(!sets.unicode);
+        // Constructs the correct flags string
+        assert_eq!(flags.build().as_string().unwrap(), "digs");
+    }
+
+    #[wasm_bindgen_test]
+    fn test_count_bytes_from_utf16_units() {
+        let s = "cool string with fun characters such as: üöä, 宿, 漢字, and even 💙 as well as 🏳‍⚧, which is a ZWJ sequence";
+        let utf16_length = 105;
+        let utf8_length = s.len();
+        assert_eq!(utf8_length, 122);
+        assert_eq!(count_bytes_from_utf16_units(s, 87).unwrap(), 104);
+        assert_eq!(
+            count_bytes_from_utf16_units(s, utf16_length).unwrap(),
+            utf8_length
+        );
+        assert!(count_bytes_from_utf16_units(s, utf16_length + 1).is_none())
+    }
+
+    #[wasm_bindgen_test]
+    fn test_slice_capture() {
+        let haystack = "cool string with fun characters such as: üöä, 宿, 漢字, and even 💙 as well as 🏳‍⚧, which is a ZWJ sequence";
+        let begin_index_utf16 = 57;
+        let end_index_utf16 = 81;
+        let js_array = js_sys::Array::new_with_length(2);
+        js_array.set(0, JsValue::from_f64(begin_index_utf16 as f64));
+        js_array.set(1, JsValue::from_f64(end_index_utf16 as f64));
+        let capture = slice_capture(haystack, &js_array).unwrap();
+        assert_eq!("even 💙 as well as 🏳‍⚧,", capture.slice)
+    }
+
+    #[wasm_bindgen_test]
+    fn test_find_js_string() {
+        let s = "cool string with fun characters such as: üöä, 宿, 漢字, and even 💙 as well as 🏳‍⚧, which is a ZWJ sequence";
+        let slice = find_js_string(
+            s,
+            &JsValue::from_str("even 💙 as well as 🏳‍⚧,")
+                .dyn_into()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!("even 💙 as well as 🏳‍⚧,", slice)
+    }
 }
