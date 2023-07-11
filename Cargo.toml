@@ -1,10 +1,10 @@
 [package]
 name = "js-regexp"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Ergonomic Rust bindings to the JavaScript standard built-in RegExp object"
 repository = "https://github.com/cyradotpink/js-regexp-rust"
-license-file = "LICENSE.txt"
+license = "MIT"
 keywords = ["JavaScript", "web", "regex"]
 categories = ["api-bindings", "web-programming", "text-processing"]
 
