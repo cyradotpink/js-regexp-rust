@@ -1,6 +1,6 @@
 [package]
 name = "js-regexp"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "Ergonomic Rust bindings to the JavaScript standard built-in RegExp object"
 repository = "https://github.com/cyradotpink/js-regexp-rust"
@@ -8,8 +8,15 @@ license = "MIT"
 keywords = ["JavaScript", "web", "regex"]
 categories = ["api-bindings", "web-programming", "text-processing"]
 
+[workspace]
+members = [
+    "macros"
+]
+
 [dependencies]
-anyhow = "1.0.71"
+js-regexp-macros = { path = "macros", version = "0.2.0" }
+
+anyhow = "1.0.72"
 thiserror = "1.0.43"
 js-sys = "0.3.64"
 wasm-bindgen = "0.2.87"

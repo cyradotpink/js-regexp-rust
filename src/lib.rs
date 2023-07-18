@@ -2,33 +2,30 @@
 //!
 //! ### Basic usage
 //! ```
-//! use js_regexp::{RegExp, Flags}
+//! use js_regexp::{flags, Flags, RegExp};
 //!
-//! let re = RegExp::new(
-//!     r#"(?<greeting>\w+), (?<name>\w+)"#,
-//!     Flags::new("d").unwrap(),
-//! )
-//! .unwrap();
-//!
+//! let mut re = RegExp::new(r#"(?<greeting>\w+), (?<name>\w+)"#, flags!("d")).unwrap();
 //! let result = re.exec("Hello, Alice!").unwrap();
-//! let named_captures = result.captures.unwrap();
-//! let named_captures = named_captures.get_named_captures_map();
+//!
+//! let mut iter = result.captures().unwrap().iter();
+//! let named_captures = result.named_captures().unwrap();
 //!
 //! assert_eq!("Hello, Alice", result.match_slice);
 //! assert_eq!(0, result.match_index);
 //! assert_eq!(12, result.match_length);
+//! assert_eq!("Hello", iter.next().unwrap().slice);
 //! assert_eq!("Hello", named_captures.get("greeting").unwrap().slice);
+//! assert_eq!(5, iter.next().unwrap().length);
 //! assert_eq!(7, named_captures.get("name").unwrap().index);
 //! ```
 
 use anyhow::Context;
 use js_sys::{Function, JsString};
-use std::{
-    collections::HashMap,
-    hash::{Hash, Hasher},
-};
+use std::collections::HashMap;
 use thiserror::Error;
 use wasm_bindgen::{JsCast, JsValue};
+
+pub use js_regexp_macros::flags;
 
 /// A wrapped JavaScript `RegExp`. The main type of this crate.
 ///
@@ -43,7 +40,7 @@ impl<'p> RegExp<'p> {
     /// Constructs a new regular expression, backed by a `RegExp` in JavaScript. \
     /// Returns an error if JavaScript throws a SyntaxError exception. \
     /// When constructed by this function, the returned value's lifetime becomes tied to the
-    /// provided `&str` pattern. See [`new_with_ownership`](RegExp::new_with_ownership)
+    /// provided `&str` pattern. See [`new_with_owned_pattern`](RegExp::new_with_owned_pattern)
     /// for an alternative that takes ownership of a `String` pattern instead.
     pub fn new(pattern: &'p str, flags: Flags) -> Result<Self, JsValue> {
         Ok(Self {
@@ -56,7 +53,7 @@ impl<'p> RegExp<'p> {
     /// Returns an error if JavaScript throws a SyntaxError exception. \
     /// Takes ownership of the provided `String` pattern. Use [`new`](RegExp::new) instead if you have a `&'static str`,
     /// or if it otherwise makes sense for the constructed value to store only a reference to your pattern.
-    pub fn new_with_ownership(pattern: String, flags: Flags) -> Result<Self, JsValue> {
+    pub fn new_with_owned_pattern(pattern: String, flags: Flags) -> Result<Self, JsValue> {
         Ok(Self {
             inner: construct_regexp_panicking(&pattern, flags.build())?,
             pattern: PatternSource::Owned(pattern),
@@ -68,7 +65,7 @@ impl<'p> RegExp<'p> {
     /// Unlike with [`new`](RegExp::new), the returned structure does not hold on to a reference to the provided
     /// `&str` pattern. This is achieved by copying any group names from the JavaScript heap every time the regular expression
     /// is used.
-    pub fn new_with_copying(pattern: &str, flags: Flags) -> Result<Self, JsValue> {
+    pub fn new_with_copied_names(pattern: &str, flags: Flags) -> Result<Self, JsValue> {
         Ok(Self {
             inner: construct_regexp_panicking(pattern, flags.build())?,
             pattern: PatternSource::Copy,
@@ -78,21 +75,39 @@ impl<'p> RegExp<'p> {
 
     /// Calls the underlying JavaScript `RegExp`'s `exec` method. \
     /// Returns `None` if the JavaScript call returns null.
-    /// The returned [`ExecResult`]'s `captures` member is `None` if the underlying JavaScript call returns an object
-    /// that does not have an `indices` property, which is only present when the [`d` flag](FlagSets.set_has_indices)
-    /// is set for the expression.
     ///
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/exec)
-    pub fn exec<'h>(&'p self, haystack: &'h str) -> Option<ExecResult<'h, 'p>> {
+    pub fn exec<'h, 'a>(&'a mut self, haystack: &'h str) -> Option<ExecResult<'h, 'a>> {
         match self.exec_internal(haystack) {
             Ok(v) => v,
             Err(v) => panic!("{:?}", v),
         }
     }
-    /// Returns a read-only reference to the flags set for this regular expression.
-    pub fn inspect_flags(&self) -> &FlagSets {
+
+    /// The flags set for this regular expression.
+    pub fn flags(&self) -> &FlagSets {
         &self.flags.sets
     }
+
+    /// Creates a [`RegExpStream`] for repeatedly matching in the same haystack
+    pub fn stream<'s, 'h>(&'s mut self, haystack: &'h str) -> RegExpStream<'s, 'h, 'p> {
+        RegExpStream {
+            regex: self,
+            haystack,
+        }
+    }
+
+    /// The inner
+    /// [`js_sys::RegExp`](https://docs.rs/js-sys/latest/js_sys/struct.RegExp.html).
+    /// Useful for directly accessing the `lastIndex` property
+    /// ([`MDN`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/lastIndex))
+    /// and the `test` method
+    /// ([`MDN`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/test)),
+    /// which are not worth wrapping explicitly as they don't require fancy conversions.
+    pub fn inner(&mut self) -> &mut js_sys::RegExp {
+        &mut self.inner
+    }
+
     fn exec_internal<'h>(
         &'p self,
         haystack: &'h str,
@@ -135,9 +150,7 @@ impl<'p> RegExp<'p> {
         }
         let named_indices_js = get_value_property_str("groups", &indices_array_js)?;
         if !named_indices_js.is_object() {
-            let _ = exec_result
-                .captures
-                .insert(CapturesList { vec: captures_vec });
+            let _ = exec_result.captures.insert(captures_vec);
             return Ok(Some(exec_result));
         }
 
@@ -160,9 +173,7 @@ impl<'p> RegExp<'p> {
                 .insert(group_name);
         }
 
-        let _ = exec_result
-            .captures
-            .insert(CapturesList { vec: captures_vec });
+        let _ = exec_result.captures.insert(captures_vec);
         Ok(Some(exec_result))
     }
 }
@@ -216,7 +227,8 @@ impl<'a> PatternSource<'a> {
 #[derive(Debug)]
 pub struct FlagSets {
     /// The `d` flag, which causes capture indices to be returned when matching.
-    /// [`ExecResult`]'s `captures` field is `None` when this flag is not set.
+    /// The [`ExecResult`] methods [`captures`](ExecResult::captures) and [`named_captures`](ExecResult::named_captures)
+    /// return `None` when this flag is not set.
     /// ([MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/hasIndices#description))
     pub has_indices: bool,
     /// The `i` flag, which enables case-insensitive matching.
@@ -243,17 +255,9 @@ pub struct FlagSets {
     /// ([MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/unicodeSets#description))
     pub unicode_sets: bool,
 }
-
-/// Restrictive interface for setting regular expression flags.
-#[derive(Debug)]
-pub struct Flags {
-    sets: FlagSets,
-}
-impl Flags {
-    /// Takes a source flags string using the same format as the JavaScript `RegExp` constructor,
-    /// but returns `None` if invalid flags, or invalid combinations of flags, are used.
-    pub fn new(source: &str) -> Option<Self> {
-        let mut flags = FlagSets {
+impl FlagSets {
+    fn new_empty_flagsets() -> FlagSets {
+        FlagSets {
             has_indices: false,
             ignore_case: false,
             global: false,
@@ -262,7 +266,22 @@ impl Flags {
             sticky: false,
             unicode: false,
             unicode_sets: false,
-        };
+        }
+    }
+}
+
+/// A checked interface for setting regular expression flags.
+///
+/// Note that the `From<&str>` impl is just a shortcut for [`new_unchecked`](Flags::new_unchecked).
+#[derive(Debug)]
+pub struct Flags {
+    sets: FlagSets,
+}
+impl Flags {
+    /// Takes a source flags string using the same format as the JavaScript `RegExp` constructor,
+    /// but returns `None` if invalid flags, or invalid combinations of flags, are used.
+    pub fn new(source: &str) -> Option<Self> {
+        let mut flags = FlagSets::new_empty_flagsets();
         for ch in source.chars() {
             match ch {
                 'd' => (!flags.has_indices).then(|| flags.has_indices = true)?,
@@ -276,18 +295,41 @@ impl Flags {
                     (!flags.unicode && !flags.unicode_sets).then(|| flags.unicode_sets = true)?
                 }
                 _ => return None,
-            }
+            };
         }
         Some(Self { sets: flags })
     }
-    /// Returns a read-only reference to the inner `FlagSets`
+    /// Same as [`new`](Flags::new), but doesn't care about invalid, duplicate, or bad combinations of flags.
+    /// Will instead ignore invalid flags, and cause the [`RegExp`] constructors to report syntax errors
+    /// from their JavaScript calls if invalid combinations are used.
+    pub fn new_unchecked(source: &str) -> Self {
+        let mut flags = FlagSets::new_empty_flagsets();
+        for ch in source.chars() {
+            match ch {
+                'd' => flags.has_indices = true,
+                'i' => flags.ignore_case = true,
+                'g' => flags.global = true,
+                's' => flags.dot_all = true,
+                'm' => flags.multiline = true,
+                'y' => flags.sticky = true,
+                'u' => flags.unicode = true,
+                'v' => flags.unicode_sets = true,
+                _ => {}
+            }
+        }
+        Self { sets: flags }
+    }
+    /// The inner [`FlagSets`]
     pub fn inspect(&self) -> &FlagSets {
         &self.sets
     }
     fn build(&self) -> JsValue {
-        let mut bytes_rep = [0u8; 7];
+        // Even though no valid flags string contains 8 flags,
+        // we want to avoid panicking here when an invalid combination of
+        // flags is set using new_unchecked
+        let mut bytes_rep = [0u8; 8];
         let mut idx = 0;
-        fn set_fn(bytes: &mut [u8; 7], idx: &mut usize, v: u8) {
+        fn set_fn(bytes: &mut [u8; 8], idx: &mut usize, v: u8) {
             bytes[*idx] = v;
             *idx += 1;
         }
@@ -303,6 +345,12 @@ impl Flags {
         JsValue::from_str(std::str::from_utf8(&bytes_rep[..idx]).unwrap())
     }
 }
+impl From<&str> for Flags {
+    /// Shortcut for [`new_unchecked`](Flags::new_unchecked)
+    fn from(value: &str) -> Self {
+        Self::new_unchecked(value)
+    }
+}
 
 /// The result of a successful [`RegExp::exec`] call.
 #[derive(Debug)]
@@ -310,78 +358,46 @@ pub struct ExecResult<'h, 'p> {
     pub match_slice: &'h str,
     pub match_index: usize,
     pub match_length: usize,
-    pub captures: Option<CapturesList<'h, 'p>>,
+    captures: Option<Vec<Capture<'h, 'p>>>,
 }
-
-/// A list of [`Capture`]s.
-#[derive(Debug)]
-pub struct CapturesList<'h, 'p> {
-    pub vec: Vec<Capture<'h, 'p>>,
-}
-impl<'h, 'p> CapturesList<'h, 'p> {
-    /// Maps group names to captures from the inner `Vec`
-    pub fn get_named_captures_map(&self) -> HashMap<&str, &Capture<'h, 'p>> {
+impl ExecResult<'_, '_> {
+    /// If the [`d` flag](FlagSets#structfield.has_indices) is set for this expression,
+    /// a list of all capture groups' captures.
+    pub fn captures(&self) -> Option<&Vec<Capture<'_, '_>>> {
+        self.captures.as_ref()
+    }
+    /// If the [`d` flag](FlagSets#structfield.has_indices) is set for this expression,
+    /// a map of all named capture groups' names to their captures.
+    pub fn named_captures(&self) -> Option<HashMap<&str, &Capture<'_, '_>>> {
+        let captures = self.captures.as_ref()?;
         let mut map = HashMap::new();
-        for capture in self.vec.iter() {
-            let key = match &capture.group_name {
-                Some(GroupName::Owned(s)) => &s[..],
-                Some(GroupName::Ref(s)) => s,
-                None => continue,
+        for capture in captures.iter() {
+            if let Some(v) = capture.name() {
+                map.insert(v, capture);
             };
-            map.insert(key, capture);
         }
-        map
+        Some(map)
     }
 }
 
 /// An index, length, slice, and optional group name of a capture in a haystack.
 #[derive(Debug)]
 pub struct Capture<'h, 'p> {
-    pub group_name: Option<GroupName<'p>>,
+    group_name: Option<GroupName<'p>>,
     pub index: usize,
     pub length: usize,
     pub slice: &'h str,
 }
+impl Capture<'_, '_> {
+    pub fn name(&self) -> Option<&str> {
+        Some(self.group_name.as_ref()?.into())
+    }
+}
 
-/// A name of a named capture group, backed either by a slice of a pattern or
-/// an owned `String` copied from JavaScript.
 #[derive(Debug)]
-pub enum GroupName<'a> {
+enum GroupName<'a> {
     Owned(String),
     Ref(&'a str),
-}
-impl PartialEq for GroupName<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        let a = match self {
-            GroupName::Owned(s) => &s[..],
-            GroupName::Ref(s) => s,
-        };
-        let b = match other {
-            GroupName::Owned(s) => &s[..],
-            GroupName::Ref(s) => s,
-        };
-        a == b
-    }
-}
-impl Eq for GroupName<'_> {}
-impl Hash for GroupName<'_> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        let s = match self {
-            GroupName::Owned(s) => &s[..],
-            GroupName::Ref(s) => s,
-        };
-        s.hash(state);
-    }
-}
-impl<'a> From<&'a str> for GroupName<'a> {
-    fn from(value: &'a str) -> Self {
-        Self::Ref(value)
-    }
-}
-impl From<String> for GroupName<'_> {
-    fn from(value: String) -> Self {
-        Self::Owned(value)
-    }
 }
 impl<'a> Into<&'a str> for &'a GroupName<'a> {
     fn into(self) -> &'a str {
@@ -389,6 +405,18 @@ impl<'a> Into<&'a str> for &'a GroupName<'a> {
             GroupName::Owned(s) => &s[..],
             GroupName::Ref(s) => s,
         }
+    }
+}
+
+/// Repeatedly match in the same haystack using the same regular expression.
+pub struct RegExpStream<'r, 'h, 'p> {
+    regex: &'r mut RegExp<'p>,
+    haystack: &'h str,
+}
+impl RegExpStream<'_, '_, '_> {
+    /// Calls [`RegExp::exec`] with this stream's expression and haystack
+    pub fn next<'s>(&'s mut self) -> Option<ExecResult<'s, 's>> {
+        self.regex.exec(self.haystack)
     }
 }
 
