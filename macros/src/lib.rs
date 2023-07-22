@@ -64,30 +64,30 @@ pub fn flags(item: TokenStream) -> TokenStream {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Mode {
+enum EnumConvertMode {
     Skip,
     Do,
 }
 
 #[proc_macro_derive(EnumConvert, attributes(enum_convert))]
-pub fn derive(input: TokenStream) -> TokenStream {
+pub fn derive_enumconvert(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::ItemEnum);
     let enum_ident = input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-    let mut output = proc_macro::TokenStream::new();
+    let mut output = TokenStream::new();
 
     let outer_attr = input
         .attrs
         .iter()
         .find(|v| v.path().is_ident("enum_convert"));
-    let mut into_mode: Mode = Mode::Skip;
-    let mut from_mode: Mode = Mode::Skip;
+    let mut into_mode: EnumConvertMode = EnumConvertMode::Skip;
+    let mut from_mode: EnumConvertMode = EnumConvertMode::Skip;
     if let Some(attr) = outer_attr {
         let _ = attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("into") {
-                into_mode = Mode::Do;
+                into_mode = EnumConvertMode::Do;
             } else if meta.path.is_ident("from") {
-                from_mode = Mode::Do;
+                from_mode = EnumConvertMode::Do;
             }
             Ok(())
         });
@@ -113,14 +113,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
             .iter()
             .find(|v| v.path().is_ident("enum_convert"));
         if let Some(attr) = inner_attr {
-            into_override = Mode::Skip;
-            from_override = Mode::Skip;
+            into_override = EnumConvertMode::Skip;
+            from_override = EnumConvertMode::Skip;
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("skip") {
                 } else if meta.path.is_ident("from") {
-                    from_override = Mode::Do;
+                    from_override = EnumConvertMode::Do;
                 } else if meta.path.is_ident("into") {
-                    into_override = Mode::Do;
+                    into_override = EnumConvertMode::Do;
                 } else {
                     return Err(meta.error("Invalid mode override"));
                 }
@@ -129,8 +129,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
             .unwrap()
         }
 
-        if let Mode::Do = from_override {
-            output.extend(Into::<proc_macro::TokenStream>::into(quote! {
+        if let EnumConvertMode::Do = from_override {
+            output.extend(Into::<TokenStream>::into(quote! {
                 impl #impl_generics From<#type_path> for #enum_ident #ty_generics #where_clause {
                     fn from(value: #type_path) -> Self {
                         Self::#variant_ident(value)
@@ -138,8 +138,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
                 }
             }))
         }
-        if let Mode::Do = into_override {
-            output.extend(Into::<proc_macro::TokenStream>::into(quote! {
+        if let EnumConvertMode::Do = into_override {
+            output.extend(Into::<TokenStream>::into(quote! {
                 impl #impl_generics TryInto<#type_path> for #enum_ident #ty_generics #where_clause {
                     type Error = &'static str;
                     fn try_into(self) -> Result<#type_path, Self::Error> {

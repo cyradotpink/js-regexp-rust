@@ -19,7 +19,6 @@
 //! assert_eq!(7, named_captures.get("name").unwrap().index);
 //! ```
 
-// use anyhow::Context;
 use js_regexp_macros::EnumConvert;
 use js_sys::{Function, JsString};
 use std::collections::HashMap;
