@@ -16,7 +16,7 @@ See [docs.rs](https://docs.rs/js-regexp/) for detailed usage information.
 
 #### Basic example
 ```rust
-use js_regexp::{flags, Flags, RegExp};
+use js_regexp::{flags, RegExp};
 
 let mut re = RegExp::new(r#"(?<greeting>\w+), (?<name>\w+)"#, flags!("d")).unwrap();
 let result = re.exec("Hello, Alice!").unwrap();

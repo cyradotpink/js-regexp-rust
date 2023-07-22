@@ -2,7 +2,7 @@
 //!
 //! ### Basic usage
 //! ```
-//! use js_regexp::{flags, Flags, RegExp};
+//! use js_regexp::{flags, RegExp};
 //!
 //! let mut re = RegExp::new(r#"(?<greeting>\w+), (?<name>\w+)"#, flags!("d")).unwrap();
 //! let result = re.exec("Hello, Alice!").unwrap();
@@ -19,10 +19,10 @@
 //! assert_eq!(7, named_captures.get("name").unwrap().index);
 //! ```
 
-use anyhow::Context;
+// use anyhow::Context;
+use js_regexp_macros::EnumConvert;
 use js_sys::{Function, JsString};
 use std::collections::HashMap;
-use thiserror::Error;
 use wasm_bindgen::{JsCast, JsValue};
 
 pub use js_regexp_macros::flags;
@@ -119,15 +119,15 @@ impl<'p> RegExp<'p> {
 
         let utf16_match_index = get_value_property_str("index", &result)?
             .as_f64()
-            .option_context()? as usize;
+            .whatever()? as usize;
         let utf8_match_index =
-            count_bytes_from_utf16_units(haystack, utf16_match_index).option_context()?;
+            count_bytes_from_utf16_units(haystack, utf16_match_index).whatever()?;
         let matched = &haystack[utf8_match_index..];
-        let string_match_js = result.iter().next().option_context()?;
-        let string_match_js: &JsString = string_match_js.dyn_ref().option_context()?;
+        let string_match_js = result.iter().next().whatever()?;
+        let string_match_js: &JsString = string_match_js.dyn_ref().whatever()?;
         let utf16_match_length = string_match_js.length() as usize;
         let utf8_match_length =
-            count_bytes_from_utf16_units(matched, utf16_match_length).option_context()?;
+            count_bytes_from_utf16_units(matched, utf16_match_length).whatever()?;
         let matched = &matched[..utf8_match_length];
         let indices_array_js = get_value_property_str("indices", &result)?;
 
@@ -142,7 +142,7 @@ impl<'p> RegExp<'p> {
         }
 
         let mut captures_vec = Vec::new();
-        let js_array_iter = js_sys::try_iter(&indices_array_js)?.option_context()?;
+        let js_array_iter = js_sys::try_iter(&indices_array_js)?.whatever()?;
         for indices_js in js_array_iter.skip(1) {
             let indices_js = indices_js?;
             let capture = slice_capture(haystack, &indices_js)?;
@@ -161,14 +161,14 @@ impl<'p> RegExp<'p> {
             let capture = slice_capture(haystack, &indices_js)?;
             let group_name = match self.pattern.get() {
                 Some(pattern) => {
-                    GroupName::Ref(find_js_string(pattern, &group_name_js).option_context()?)
+                    GroupName::Ref(find_js_string(pattern, &group_name_js).whatever()?)
                 }
-                None => GroupName::Owned(group_name_js.as_string().option_context()?),
+                None => GroupName::Owned(group_name_js.as_string().whatever()?),
             };
             let _ = captures_vec
                 .iter_mut()
                 .find(|v| v.index == capture.index && v.length == capture.length)
-                .option_context()?
+                .whatever()?
                 .group_name
                 .insert(group_name);
         }
@@ -180,30 +180,26 @@ impl<'p> RegExp<'p> {
 
 /// An error that occurs when something unexpected happens
 /// while interacting with JavaScript.
-#[derive(Debug, Error)]
+#[derive(Debug, EnumConvert)]
+#[enum_convert(from)]
 enum JsError {
-    #[error("JavaScript exception")]
     JavaScript(JsValue),
-    #[error("Other error")]
-    Other(#[from] anyhow::Error),
+    Other(OptionFail),
 }
-impl From<JsValue> for JsError {
-    fn from(value: JsValue) -> Self {
-        JsError::JavaScript(value)
+#[derive(Debug)]
+struct OptionFail {}
+impl std::fmt::Display for OptionFail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Something weird happened idk")
     }
 }
-
-trait OptionContext<T, E> {
-    fn option_context(self) -> Result<T, anyhow::Error>
-    where
-        Self: Context<T, E>;
+impl std::error::Error for OptionFail {}
+trait OptionContext<T> {
+    fn whatever(self) -> Result<T, OptionFail>;
 }
-impl<T, E> OptionContext<T, E> for Option<T> {
-    fn option_context(self) -> Result<T, anyhow::Error>
-    where
-        Self: Context<T, E>,
-    {
-        self.context("Unexpectedly failed to unwrap an option while interacting with JavaScript")
+impl<T> OptionContext<T> for Option<T> {
+    fn whatever(self) -> Result<T, OptionFail> {
+        self.ok_or(OptionFail {})
     }
 }
 
@@ -420,12 +416,11 @@ impl RegExpStream<'_, '_, '_> {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, EnumConvert)]
+#[enum_convert(from)]
 enum NewRegExpError {
-    #[error("Syntax error")]
     SyntaxError(JsValue),
-    #[error("Unexpected error")]
-    JsError(#[from] JsError),
+    JsError(JsError),
 }
 fn construct_regexp_panicking(pattern: &str, flags: JsValue) -> Result<js_sys::RegExp, JsValue> {
     construct_regexp(pattern, flags).map_err(|e| match e {
@@ -438,7 +433,7 @@ fn construct_regexp(pattern: &str, flags: JsValue) -> Result<js_sys::RegExp, New
     let regexp_object = get_value_property_str("RegExp", &global).map_err(Into::<JsError>::into)?;
     let regexp_object: &Function = regexp_object
         .dyn_ref()
-        .option_context()
+        .whatever()
         .map_err(Into::<JsError>::into)?;
     let args = js_sys::Array::new_with_length(2);
     args.set(0, JsValue::from_str(pattern));
@@ -460,17 +455,13 @@ fn get_value_property_str(key: &str, target: &JsValue) -> Result<JsValue, JsValu
 }
 
 fn slice_capture<'h, 'p>(haystack: &'h str, indices: &JsValue) -> Result<Capture<'h, 'p>, JsError> {
-    let utf16_index = get_value_property_usize(0, indices)?
-        .as_f64()
-        .option_context()? as usize;
-    let utf16_end = get_value_property_usize(1, indices)?
-        .as_f64()
-        .option_context()? as usize;
+    let utf16_index = get_value_property_usize(0, indices)?.as_f64().whatever()? as usize;
+    let utf16_end = get_value_property_usize(1, indices)?.as_f64().whatever()? as usize;
     let utf16_length = utf16_end - utf16_index;
     let capture = haystack;
-    let utf8_begin = count_bytes_from_utf16_units(capture, utf16_index).option_context()?;
+    let utf8_begin = count_bytes_from_utf16_units(capture, utf16_index).whatever()?;
     let capture = &capture[utf8_begin..];
-    let utf8_length = count_bytes_from_utf16_units(capture, utf16_length).option_context()?;
+    let utf8_length = count_bytes_from_utf16_units(capture, utf16_length).whatever()?;
     let capture = &capture[..utf8_length];
     Ok(Capture {
         group_name: None,
