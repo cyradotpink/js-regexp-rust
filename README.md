@@ -34,10 +34,7 @@ assert_eq!(7, named_captures.get("name").unwrap().index);
 ```
 
 ## Stability
-js-regexp is not tested extensively. \
-The public interface may change across minor versions while
-js-regexp is pre-1.0.0, but because of its simplicity and small scope I expect any required changes in consuming code to
-be quick and easy.
+js-regexp is not tested extensively, the API is not super nice, and premature/counterproductive attempts at optimization are present - so things could change.
 
 Issues and pull requests are welcome!
 
